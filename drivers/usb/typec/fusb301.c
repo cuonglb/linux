@@ -447,7 +447,7 @@ static const struct of_device_id fusb301_of_match[] = {
 MODULE_DEVICE_TABLE(of, fusb301_of_match);
 
 static struct i2c_driver fusb301_driver = {
-	.probe_new	= fusb301_probe,
+	.probe		= fusb301_probe,
 	.remove		= fusb301_remove,
 	.driver		= {
 		.name		= "fusb301",

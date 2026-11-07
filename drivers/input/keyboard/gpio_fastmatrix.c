@@ -489,7 +489,7 @@ static int gpio_keyboard_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int gpio_keyboard_remove(struct platform_device *pdev)
+static void gpio_keyboard_remove(struct platform_device *pdev)
 {
 	struct gpio_keyboard *gkb = platform_get_drvdata(pdev);
 	int i;
@@ -501,8 +501,6 @@ static int gpio_keyboard_remove(struct platform_device *pdev)
 			free_irq(gpiod_to_irq(gkb->row_gpios->desc[i]), gkb);
 	}
 	input_unregister_device(gkb->input_dev);
-
-	return 0;
 }
 
 static const struct of_device_id gpio_keyboard_dt_match[] = {
