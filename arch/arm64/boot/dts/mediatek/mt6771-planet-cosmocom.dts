@@ -320,10 +320,14 @@
 			};
 		};
 	};
-};
 
-&dsi_out {
-	remote-endpoint = <&panel_in>;
+	ports {
+		port {
+			dsi_out: endpoint {
+				remote-endpoint = <&panel_in>;
+			};
+		};
+	};
 };
 
 &gpu {
