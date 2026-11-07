@@ -42,3 +42,13 @@
 		/delete-node/ idle-states;
 	};
 };
+
+/*
+ * MT8183 dtsi added dpi0, but MT6771 does not have DPI wired.
+ * If dpi0 is left enabled without a bridge, mtk_dpi_probe fails and mediatek-drm
+ * KMS init fails or defers indefinitely.
+ */
+&dpi0 {
+	status = "disabled";
+};
+
