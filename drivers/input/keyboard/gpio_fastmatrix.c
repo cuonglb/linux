@@ -7,6 +7,8 @@
  *  Based on matrix_keypad.c
  */
 
+#include <linux/bitops.h>
+#include <linux/moduleparam.h>
 #include <linux/types.h>
 #include <linux/delay.h>
 #include <linux/platform_device.h>
@@ -24,6 +26,31 @@
 #include <linux/gpio/consumer.h>
 #include <linux/gpio/driver.h>
 
+/*
+ * pennyos: closing the Cosmo lid makes the matrix read garbage: first a few
+ * random keys, then every key down, until the lid opens again.
+ *  - More than GKB_MAX_KEYS_DOWN keys at once is not a person typing: report
+ *    nothing pressed and look again every GKB_GHOST_RESCAN_MS, with the row
+ *    interrupts left off (they are level triggered and would fire nonstop).
+ *  - Optionally (press_scans, off by default) a key press is only reported once
+ *    it has been read in earlier scans as well, which swallows the random keys
+ *    that precede the burst but makes quick taps get lost.
+ */
+#define GKB_MAX_KEYS_DOWN	10
+#define GKB_GHOST_RESCAN_MS	200
+#define GKB_PRESS_SCANS		3	/* history depth, the most that can be asked for */
+#define GKB_READ_RETRY_MS	5	/* a scan whose row read failed is redone after */
+
+/*
+ * How many earlier scans must also show a key before its press is reported
+ * (0 = report at once). One scan of the Cosmo matrix takes roughly 15-20 ms over
+ * I2C, so each step adds about that much delay and that much minimum press
+ * length. Tunable at run time: /sys/module/gpio_fastmatrix/parameters/press_scans
+ */
+static unsigned int press_scans;	/* 0: any delay here is felt when typing */
+module_param(press_scans, uint, 0644);
+MODULE_PARM_DESC(press_scans, "earlier scans that must confirm a key press (0-3)");
+
 struct gpio_keyboard {
 	struct device *dev;
 	struct input_dev *input_dev;
@@ -39,6 +66,8 @@ struct gpio_keyboard {
 	DECLARE_BITMAP(disabled_gpios, MATRIX_MAX_ROWS);
 
 	u32 last_key_state[MATRIX_MAX_COLS];
+	/* pennyos: raw readings of the previous scans, newest first */
+	u32 history[GKB_PRESS_SCANS][MATRIX_MAX_COLS];
 	struct delayed_work work;
 	struct mutex lock;
 
@@ -156,7 +185,9 @@ static void gpio_keyboard_scan(struct work_struct *work)
 	struct input_dev *input_dev = gkb->input_dev;
 	const unsigned short *keycodes = input_dev->keycode;
 	u32 *new_state;
-	unsigned long row_values;
+	unsigned long row_values = 0;
+	unsigned int down = 0;
+	bool ghost;
 	int ret, row, col, code;
 	u32 keymask = 0;
 
@@ -176,7 +207,23 @@ static void gpio_keyboard_scan(struct work_struct *work)
 						     gkb->row_gpios->desc,
 						     gkb->row_gpios->info,
 						     &row_values);
-		new_state[col] = row_values;
+		/*
+		 * pennyos: on a failed read row_values still holds the previous
+		 * column's rows, which would be taken as this column's keys: a
+		 * phantom key and a lost one. Drop the whole scan and redo it soon,
+		 * row interrupts still off.
+		 */
+		if (ret < 0) {
+			dev_warn_ratelimited(gkb->dev, "row read failed: %d\n", ret);
+			deactivate_one_column(gkb, col);
+			activate_all_cols(gkb);
+			kfree(new_state);
+			queue_delayed_work(system_highpri_wq, &gkb->work,
+					   msecs_to_jiffies(GKB_READ_RETRY_MS));
+			return;
+		}
+		/* only the row bits are ours; the rest of the word is not written */
+		new_state[col] = row_values & GENMASK(gkb->row_gpios->ndescs - 1, 0);
 		keymask |= new_state[col];
 
 		if (deactivate_one_column(gkb, col)) {
@@ -186,6 +233,25 @@ static void gpio_keyboard_scan(struct work_struct *work)
 	}
 
 	activate_all_cols(gkb);
+
+	for (col = 0; col < gkb->col_gpios->ndescs; col++)
+		down += hweight32(new_state[col]);
+	ghost = down > GKB_MAX_KEYS_DOWN;
+
+	for (col = 0; col < gkb->col_gpios->ndescs; col++) {
+		u32 raw = ghost ? 0 : new_state[col];
+		u32 confirmed = raw;
+		unsigned int i;
+
+		for (i = 0; i < min_t(unsigned int, press_scans, GKB_PRESS_SCANS); i++)
+			confirmed &= gkb->history[i][col];
+		for (i = GKB_PRESS_SCANS - 1; i > 0; i--)
+			gkb->history[i][col] = gkb->history[i - 1][col];
+		gkb->history[0][col] = raw;
+
+		/* keys already down stay down while still read; new ones need history */
+		new_state[col] = (gkb->last_key_state[col] & raw) | confirmed;
+	}
 
 	for (col = 0; col < gkb->col_gpios->ndescs; col++) {
 		u32 bits_changed = gkb->last_key_state[col] ^ new_state[col];
@@ -204,8 +270,15 @@ static void gpio_keyboard_scan(struct work_struct *work)
 	}
 	input_sync(input_dev);
 
-	memcpy(gkb->last_key_state, new_state, sizeof(gkb->last_key_state));
+	memcpy(gkb->last_key_state, new_state,
+	       gkb->col_gpios->ndescs * sizeof(*new_state));
 	kfree(new_state);
+
+	if (ghost) {
+		queue_delayed_work(system_highpri_wq, &gkb->work,
+				   msecs_to_jiffies(GKB_GHOST_RESCAN_MS));
+		return;
+	}
 
 	/* Avoid missing key release events on quirky hardware */
 	if (gkb->autorescan_ms && keymask) {
@@ -219,6 +292,27 @@ end:
 	gkb->scan_pending = false;
 	enable_row_irqs(gkb);
 	mutex_unlock(&gkb->lock);
+
+	/*
+	 * pennyos: a key that went down while this scan ran (after its column was
+	 * read) or before the row interrupts were back on raises no interrupt that
+	 * reaches us: the expander only reports changes since its last read, and the
+	 * scan's own reads consumed it. Look once more with every column driven, so
+	 * such a key is picked up now instead of on its next press.
+	 */
+	if (!gkb->stopped &&
+	    !gpiod_get_array_value_cansleep(gkb->row_gpios->ndescs,
+					    gkb->row_gpios->desc,
+					    gkb->row_gpios->info, &row_values) &&
+	    (row_values & GENMASK(gkb->row_gpios->ndescs - 1, 0))) {
+		mutex_lock(&gkb->lock);
+		if (!gkb->scan_pending && !gkb->stopped) {
+			disable_row_irqs(gkb);
+			gkb->scan_pending = true;
+			mod_delayed_work(system_highpri_wq, &gkb->work, 0);
+		}
+		mutex_unlock(&gkb->lock);
+	}
 }
 
 static irqreturn_t gpio_keyboard_interrupt(int irq, void *id)
@@ -230,10 +324,11 @@ static irqreturn_t gpio_keyboard_interrupt(int irq, void *id)
 	 * scan already. In that case we should not try to
 	 * disable IRQs again.
 	 */
+	mutex_lock(&gkb->lock);
+
+	/* pennyos: checked under the lock (the "out" path unlocks it) */
 	if (unlikely(gkb->scan_pending || gkb->stopped))
 		goto out;
-
-	mutex_lock(&gkb->lock);
 
 	disable_row_irqs(gkb);
 	gkb->scan_pending = true;
@@ -452,6 +547,8 @@ static int gpio_keyboard_probe(struct platform_device *pdev)
 	gkb->stopped = true;
 	INIT_DELAYED_WORK(&gkb->work, gpio_keyboard_scan);
 	memset(gkb->last_key_state, 0, sizeof(gkb->last_key_state));
+	/* gkb comes from devm_kmalloc(): not zeroed */
+	memset(gkb->history, 0, sizeof(gkb->history));
 	mutex_init(&gkb->lock);
 
 	if (!gkb->input_dev->name)

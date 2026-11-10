@@ -6433,6 +6433,13 @@ __setup("regulator_ignore_unused", regulator_ignore_unused_setup);
 static void regulator_init_complete_work_function(struct work_struct *work)
 {
 	/*
+	 * pennyos (debug only): never switch off "unused" regulators. Most of
+	 * the board is not described yet, so unused does not mean unneeded.
+	 */
+	pr_info("pennyos: leaving unused regulators enabled\n");
+	return;
+
+	/*
 	 * Regulators may had failed to resolve their input supplies
 	 * when were registered, either because the input supply was
 	 * not registered yet or because its parent device was not

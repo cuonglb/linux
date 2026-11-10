@@ -11,6 +11,7 @@
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/dma-mapping.h>
+#include <linux/aperture.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
@@ -663,6 +664,13 @@ static int mtk_drm_bind(struct device *dev)
 
 	private->drm_master = true;
 	drm->dev_private = private;
+
+	/*
+	 * pennyos: take over from the bootloader framebuffer (simple-framebuffer)
+	 * so that fbcon follows us to the DRM fbdev instead of staying on a buffer
+	 * that is no longer scanned out.
+	 */
+	aperture_remove_all_conflicting_devices(mtk_drm_driver.name);
 	for (i = 0; i < private->data->mmsys_dev_num; i++)
 		private->all_drm_private[i]->drm = drm;
 

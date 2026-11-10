@@ -4,6 +4,7 @@
 * Author: Tianping.Fang <tianping.fang@mediatek.com>
 */
 
+#include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/mfd/mt6397/core.h>
@@ -11,10 +12,15 @@
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/reboot.h>
 #include <linux/regmap.h>
 #include <linux/rtc.h>
 #include <linux/mfd/mt6397/rtc.h>
 #include <linux/mod_devicetable.h>
+
+/* MT6358 RTC_BBPU bits (see MT6358 datasheet sec. 5.5.1) */
+#define RTC_BBPU_PWREN		BIT(0)  /* 1 = keep power rails; 0 = cut power */
+#define RTC_BBPU_CLR		BIT(1)  /* write 1 to clear all BBPU status */
 
 static int mtk_rtc_write_trigger(struct mt6397_rtc *rtc)
 {
@@ -257,6 +263,37 @@ static const struct rtc_class_ops mtk_rtc_ops = {
 	.set_alarm  = mtk_rtc_set_alarm,
 };
 
+/*
+ * mtk_rtc_poweroff - cut PMIC power rails via MT6358 RTC BBPU register.
+ *
+ * Without this, PSCI SYSTEM_OFF leaves the MT6358 BBPU.PWREN bit set, keeping
+ * all power rails asserted. The SoC sits in WFI and the Esc/On key cannot
+ * restart it without disconnecting the battery.
+ *
+ * Procedure (from MT6358 datasheet, sec. 5.5.1):
+ *   1. Write KEY | CLR to RTC_BBPU  (clears PWREN and all status bits)
+ *   2. Trigger WRTGR to latch the value into the RTC hardware
+ *   3. The PMIC de-asserts all power rails within ~10 ms
+ */
+static int mtk_rtc_poweroff(struct sys_off_data *data)
+{
+	struct mt6397_rtc *rtc = data->cb_data;
+
+	/* KEY | CLR: unlock + clear PWREN so the PMIC cuts power */
+	regmap_write(rtc->regmap,
+		     rtc->addr_base + RTC_BBPU,
+		     RTC_BBPU_KEY | RTC_BBPU_CLR);
+
+	/* Latch into HW; ignore errors – we are shutting down anyway */
+	regmap_write(rtc->regmap,
+		     rtc->addr_base + rtc->data->wrtgr, 1);
+
+	/* Give the PMIC time to react before PSCI kills the CPU */
+	mdelay(200);
+
+	return NOTIFY_DONE;
+}
+
 static int mtk_rtc_probe(struct platform_device *pdev)
 {
 	struct resource *res;
@@ -302,6 +339,20 @@ static int mtk_rtc_probe(struct platform_device *pdev)
 	device_init_wakeup(&pdev->dev, 1);
 
 	rtc->rtc_dev->ops = &mtk_rtc_ops;
+
+	/*
+	 * Register a high-priority poweroff handler so the PMIC cuts all
+	 * power rails before PSCI SYSTEM_OFF completes. Without this the
+	 * MT6358 keeps BBPU.PWREN asserted, the board stays in a zombie
+	 * WFI state, and the Esc/On key cannot power it back on.
+	 */
+	ret = devm_register_sys_off_handler(&pdev->dev,
+					    SYS_OFF_MODE_POWER_OFF,
+					    SYS_OFF_PRIO_HIGH,
+					    mtk_rtc_poweroff, rtc);
+	if (ret)
+		dev_warn(&pdev->dev,
+			 "failed to register poweroff handler: %d\n", ret);
 
 	return devm_rtc_register_device(rtc->rtc_dev);
 }

@@ -577,6 +577,46 @@ static int mt6358_put_wov(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+/*
+ * pennyos: report the playback gains from ana_gain, the value the driver applies
+ * when the output powers up. The gain registers themselves are parked at -40 dB
+ * while the output is off, so snd_soc_get_volsw() read back an out-of-range value
+ * (-13 on a 0..18 control) whenever nothing played, and alsactl saved that.
+ */
+static int mt6358_get_volsw(struct snd_kcontrol *kcontrol,
+			    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+			snd_kcontrol_chip(kcontrol);
+	struct mt6358_priv *priv = snd_soc_component_get_drvdata(component);
+	struct soc_mixer_control *mc =
+			(struct soc_mixer_control *)kcontrol->private_value;
+	int l, r;
+
+	switch (mc->reg) {
+	case MT6358_ZCD_CON1:
+		l = AUDIO_ANALOG_VOLUME_LINEOUTL;
+		r = AUDIO_ANALOG_VOLUME_LINEOUTR;
+		break;
+	case MT6358_ZCD_CON2:
+		l = AUDIO_ANALOG_VOLUME_HPOUTL;
+		r = AUDIO_ANALOG_VOLUME_HPOUTR;
+		break;
+	case MT6358_ZCD_CON3:
+		l = AUDIO_ANALOG_VOLUME_HSOUTL;
+		r = AUDIO_ANALOG_VOLUME_HSOUTR;
+		break;
+	default:
+		return snd_soc_get_volsw(kcontrol, ucontrol);
+	}
+
+	/* the controls are inverted: register 0 is the loudest */
+	ucontrol->value.integer.value[0] = mc->max - priv->ana_gain[l];
+	if (snd_soc_volsw_is_stereo(mc))
+		ucontrol->value.integer.value[1] = mc->max - priv->ana_gain[r];
+	return 0;
+}
+
 static int mt6358_dmic_mode_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
@@ -617,13 +657,13 @@ static const struct snd_kcontrol_new mt6358_snd_controls[] = {
 	/* dl pga gain */
 	SOC_DOUBLE_EXT_TLV("Headphone Volume",
 			   MT6358_ZCD_CON2, 0, 7, 0x12, 1,
-			   snd_soc_get_volsw, mt6358_put_volsw, playback_tlv),
+			   mt6358_get_volsw, mt6358_put_volsw, playback_tlv),
 	SOC_DOUBLE_EXT_TLV("Lineout Volume",
 			   MT6358_ZCD_CON1, 0, 7, 0x12, 1,
-			   snd_soc_get_volsw, mt6358_put_volsw, playback_tlv),
+			   mt6358_get_volsw, mt6358_put_volsw, playback_tlv),
 	SOC_SINGLE_EXT_TLV("Handset Volume",
 			   MT6358_ZCD_CON3, 0, 0x12, 1,
-			   snd_soc_get_volsw, mt6358_put_volsw, playback_tlv),
+			   mt6358_get_volsw, mt6358_put_volsw, playback_tlv),
 	/* ul pga gain */
 	SOC_DOUBLE_R_EXT_TLV("PGA Volume",
 			     MT6358_AUDENC_ANA_CON0, MT6358_AUDENC_ANA_CON1,

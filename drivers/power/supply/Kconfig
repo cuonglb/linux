@@ -1030,4 +1030,10 @@ config FUEL_GAUGE_MM8013
 	  the state of charge, temperature, cycle count, actual and design
 	  capacity, etc.
 
+config BATTERY_COSMO_FG
+	tristate "MT6358 fuel gauge (Planet Cosmo)"
+	depends on MFD_MT6397
+	help
+	  State of charge from the MT6358 coulomb counter and the cell voltage.
+
 endif # POWER_SUPPLY

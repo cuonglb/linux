@@ -62,6 +62,7 @@
 struct aw9523_irq {
 	struct mutex lock;
 	u16 cached_gpio;
+	u16 intr_dis;	/* pennyos: wanted INTR_DIS bits, written on bus unlock */
 };
 
 /*
@@ -428,10 +429,8 @@ static void aw9523_irq_mask(struct irq_data *d)
 {
 	struct aw9523 *awi = gpiochip_get_data(irq_data_get_irq_chip_data(d));
 	irq_hw_number_t hwirq = irqd_to_hwirq(d);
-	unsigned int n = hwirq % AW9523_PINS_PER_PORT;
 
-	regmap_update_bits(awi->regmap, AW9523_REG_INTR_DIS(hwirq),
-			   BIT(n), BIT(n));
+	awi->irq->intr_dis |= BIT(hwirq);
 	gpiochip_disable_irq(&awi->gpio, hwirq);
 }
 
@@ -446,11 +445,9 @@ static void aw9523_irq_unmask(struct irq_data *d)
 {
 	struct aw9523 *awi = gpiochip_get_data(irq_data_get_irq_chip_data(d));
 	irq_hw_number_t hwirq = irqd_to_hwirq(d);
-	unsigned int n = hwirq % AW9523_PINS_PER_PORT;
 
 	gpiochip_enable_irq(&awi->gpio, hwirq);
-	regmap_update_bits(awi->regmap, AW9523_REG_INTR_DIS(hwirq),
-			   BIT(n), 0);
+	awi->irq->intr_dis &= ~BIT(hwirq);
 }
 
 static irqreturn_t aw9523_irq_thread_func(int irq, void *dev_id)
@@ -460,18 +457,31 @@ static irqreturn_t aw9523_irq_thread_func(int irq, void *dev_id)
 	unsigned long changed_gpio;
 	unsigned int tmp, port_pin, i, ret;
 
+	/* pennyos: under i2c_lock like every other register access; not held
+	 * across handle_nested_irq(), whose handlers disable interrupts */
+	mutex_lock(&awi->i2c_lock);
 	for (i = 0; i < AW9523_NUM_PORTS; i++) {
 		port_pin = i * AW9523_PINS_PER_PORT;
 		ret = regmap_read(awi->regmap,
 				  AW9523_REG_IN_STATE(port_pin),
 				  &tmp);
-		if (ret)
-			return ret;
+		if (ret) {
+			mutex_unlock(&awi->i2c_lock);
+			return IRQ_NONE;
+		}
 		val |= (u8)tmp << (i * 8);
 	}
+	mutex_unlock(&awi->i2c_lock);
 
-	/* Handle GPIO input release interrupt as well */
-	changed_gpio = awi->irq->cached_gpio ^ val;
+	/*
+	 * pennyos: tell every mapped pin, not only the ones that differ from the
+	 * value seen at the previous interrupt. That value goes stale whenever a
+	 * consumer reads the inputs itself (reading clears the chip's interrupt), and
+	 * a key matrix does exactly that while scanning; a change back to the stale
+	 * value was then dropped, so a key press got lost. The interrupt line only
+	 * fires on a real change, and consumers read the pins themselves anyway.
+	 */
+	changed_gpio = GENMASK(awi->gpio.ngpio - 1, 0);
 	awi->irq->cached_gpio = val;
 
 	/*
@@ -499,7 +509,6 @@ static void aw9523_irq_bus_lock(struct irq_data *d)
 	struct aw9523 *awi = gpiochip_get_data(irq_data_get_irq_chip_data(d));
 
 	mutex_lock(&awi->irq->lock);
-	regcache_cache_only(awi->regmap, true);
 }
 
 /*
@@ -513,8 +522,22 @@ static void aw9523_irq_bus_sync_unlock(struct irq_data *d)
 {
 	struct aw9523 *awi = gpiochip_get_data(irq_data_get_irq_chip_data(d));
 
-	regcache_cache_only(awi->regmap, false);
-	regcache_sync(awi->regmap);
+	/*
+	 * pennyos: write only the interrupt mask, under i2c_lock. Upstream put the
+	 * whole regmap in cache-only mode between lock and unlock and then synced it
+	 * all back, without i2c_lock: a GPIO user running meanwhile (the keyboard
+	 * scan, which turns its row interrupts off and on around every scan) had
+	 * its direction and level writes kept in the cache only and its input
+	 * reads fail, and put the wrong rows under the wrong columns. i2c_lock is
+	 * not held from bus_lock on: the IRQ core calls gpiochip get_direction()
+	 * in between, which takes it.
+	 */
+	mutex_lock(&awi->i2c_lock);
+	regmap_write(awi->regmap, AW9523_REG_INTR_DIS(0),
+		     awi->irq->intr_dis & U8_MAX);
+	regmap_write(awi->regmap, AW9523_REG_INTR_DIS(AW9523_PINS_PER_PORT),
+		     awi->irq->intr_dis >> 8);
+	mutex_unlock(&awi->i2c_lock);
 	mutex_unlock(&awi->irq->lock);
 }
 
@@ -813,6 +836,8 @@ static int aw9523_init_irq(struct aw9523 *awi, int irq)
 	if (!awi->irq)
 		return -ENOMEM;
 
+	/* all masked, as aw9523_hw_init() leaves the chip */
+	awi->irq->intr_dis = U16_MAX;
 	mutex_init(&awi->irq->lock);
 
 	ret = devm_request_threaded_irq(dev, irq, NULL, aw9523_irq_thread_func,

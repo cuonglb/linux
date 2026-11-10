@@ -996,4 +996,15 @@ config DRM_PANEL_XINPENG_XPP055C272
 	  XPP055C272 controller for 720x1280 LCD panels with MIPI/RGB/SPI
 	  system interfaces.
 source "drivers/gpu/drm/panel/msm8916-generated/Kconfig"
+
+config DRM_PANEL_PLANET_SSD2092
+	tristate "Planet Cosmo Communicator SSD2092 DSI panel"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on GPIOLIB
+	help
+	  Say Y here to enable support for the Solomon SSD2092 TDDI panel
+	  used as the main display on the Planet Computers Cosmo Communicator.
+	  This is a 1080x2160 4-lane MIPI DSI panel (sync-pulse video mode).
+
 endmenu
