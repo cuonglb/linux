@@ -21,6 +21,11 @@
 /* MT6358 RTC_BBPU bits (see MT6358 datasheet sec. 5.5.1) */
 #define RTC_BBPU_PWREN		BIT(0)  /* 1 = keep power rails; 0 = cut power */
 #define RTC_BBPU_CLR		BIT(1)  /* write 1 to clear all BBPU status */
+#define RTC_BBPU_RELOAD		BIT(5)
+
+/* MT6358 Power Path Control 0: bit 0 (RG_PWRHOLD) holds PMIC power rails on */
+#define MT6358_PPCCTL0		0x0a08
+#define MT6358_RG_PWRHOLD	BIT(0)
 
 static int mtk_rtc_write_trigger(struct mt6397_rtc *rtc)
 {
@@ -279,16 +284,22 @@ static int mtk_rtc_poweroff(struct sys_off_data *data)
 {
 	struct mt6397_rtc *rtc = data->cb_data;
 
-	/* KEY | CLR: unlock + clear PWREN so the PMIC cuts power */
+	/* 1. Clear RTC_BBPU PWREN and latch via WRTGR */
 	regmap_write(rtc->regmap,
 		     rtc->addr_base + RTC_BBPU,
-		     RTC_BBPU_KEY | RTC_BBPU_CLR);
+		     RTC_BBPU_KEY | RTC_BBPU_RELOAD | RTC_BBPU_CLR);
+	mtk_rtc_write_trigger(rtc);
 
-	/* Latch into HW; ignore errors – we are shutting down anyway */
-	regmap_write(rtc->regmap,
-		     rtc->addr_base + rtc->data->wrtgr, 1);
+	/*
+	 * 2. On MT6358 (addr_base == 0x0588), power rails are held by
+	 *    PMIC_RG_PWRHOLD (bit 0 of MT6358_PPCCTL0 = 0x0a08). De-assert
+	 *    it to immediately cut all PMIC power rails.
+	 */
+	if (rtc->addr_base == 0x0588)
+		regmap_update_bits(rtc->regmap, MT6358_PPCCTL0,
+				   MT6358_RG_PWRHOLD, 0);
 
-	/* Give the PMIC time to react before PSCI kills the CPU */
+	/* Give the PMIC time to cut power before PSCI halts the CPU */
 	mdelay(200);
 
 	return NOTIFY_DONE;
