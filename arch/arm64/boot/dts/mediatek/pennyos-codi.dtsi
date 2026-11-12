@@ -1,0 +1,62 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR MIT)
+/*
+ * CoDi cover display: STM32 control GPIOs (reset, download/boot0, wake), the
+ * cover key, and the UART link to the STM32 (/dev/ttyS1, uart1 @ 11003000).
+ *
+ * Reconstructed from the DTB of the known-good 6.12.116 build (the original
+ * file was never committed). pinmux values are (gpio << 8) | function.
+ */
+#include <dt-bindings/input/input.h>
+
+/ {
+	aliases {
+		serial1 = &uart1;
+	};
+
+	cosmo-gpio-keys {
+		button-cover {
+			label = "Cover Key";
+			gpios = <&pio 7 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_SCREENLOCK>;
+			debounce-interval = <50>;
+			wakeup-source;
+		};
+	};
+};
+
+&pio {
+	stm32_ctrl_pins: stm32-ctrl-pins {
+		pins-reset {
+			pinmux = <0x4d00>;	/* GPIO77 */
+			output-high;
+		};
+
+		pins-download {
+			pinmux = <0x5000>;	/* GPIO80 */
+			output-low;
+		};
+
+		pins-wake {
+			pinmux = <0x9d00>;	/* GPIO157 */
+			output-high;
+		};
+	};
+
+	uart1_pins: uart1-pins {
+		pins-rx {
+			pinmux = <0x6e07>;	/* GPIO110 URXD1 */
+			input-enable;
+			bias-pull-up;
+		};
+
+		pins-tx {
+			pinmux = <0x7007>;	/* GPIO112 UTXD1 */
+		};
+	};
+};
+
+&uart1 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart1_pins>, <&stm32_ctrl_pins>;
+};

@@ -321,13 +321,10 @@
 		};
 	};
 
-	ports {
-		port {
-			dsi_out: endpoint {
-				remote-endpoint = <&panel_in>;
-			};
-		};
-	};
+};
+
+&dsi_out {
+	remote-endpoint = <&panel_in>;
 };
 
 &gpu {
@@ -510,7 +507,20 @@
 			compatible = "mediatek,mt6370-charger";
 			interrupts = <68>, <48>, <6>;
 			interrupt-names = "uvp_d_evt", "attach_i", "mivr";
-			io-channels = <&mt6370_adc MT6370_CHAN_IBUS>;
+			/*
+			 * The driver indexes iio_adcs[] by raw channel number (IBUS = 5), so the
+			 * array must hold every channel in order; a lone IBUS entry makes
+			 * mt6370_chg_mivr_dwork_func() read past the array and oops.
+			 */
+			io-channels = <&mt6370_adc MT6370_CHAN_VBUSDIV5>,
+				      <&mt6370_adc MT6370_CHAN_VBUSDIV2>,
+				      <&mt6370_adc MT6370_CHAN_VSYS>,
+				      <&mt6370_adc MT6370_CHAN_VBAT>,
+				      <&mt6370_adc MT6370_CHAN_TS_BAT>,
+				      <&mt6370_adc MT6370_CHAN_IBUS>,
+				      <&mt6370_adc MT6370_CHAN_IBAT>,
+				      <&mt6370_adc MT6370_CHAN_CHG_VDDP>,
+				      <&mt6370_adc MT6370_CHAN_TEMP_JC>;
 
 			mt6370_otg_vbus: usb-otg-vbus-regulator {
 				regulator-name = "mt6370-usb-otg-vbus";
@@ -691,9 +701,9 @@
 	pinctrl-0 = <&usb_default_pins>;
 	status = "okay";
 	mediatek,u3p-dis-msk = <1>;
-	dr_mode = "otg";
-	usb-role-switch;
-	role-switch-default-mode = "peripheral";
+	/* pennyos debug: force unconditional peripheral so the USB gadget (ttyGS0)
+	   is a reliable "reached USB init" signal, decoupled from mt6370 TCPC/role-switch */
+	dr_mode = "peripheral";
 	vusb33-supply = <&mt6358_vusb_reg>;
 	wakeup-source;
 
@@ -888,3 +898,29 @@
 		};
 	};
 };
+
+#include "pennyos-debug.dtsi"
+
+#include "pennyos-panel-ssd2092.dtsi"
+
+#include "pennyos-power-key.dtsi"
+
+#include "pennyos-touch-ssd20xx.dtsi"
+
+#include "pennyos-consys.dtsi"
+
+#include "pennyos-lid-keys.dtsi"
+
+#include "pennyos-sound.dtsi"
+
+#include "pennyos-kbd-backlight.dtsi"
+
+#include "pennyos-battery.dtsi"
+
+#include "pennyos-sensors.dtsi"
+
+#include "pennyos-leds.dtsi"
+
+#include "pennyos-codi.dtsi"
+
+#include "mt6771-mtk-lk-compat.dtsi"
