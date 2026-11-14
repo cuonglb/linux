@@ -167,7 +167,8 @@ static int cosmo_fg_charger(int *online, int *status)
 /* remaining usable charge the OCV table gives for this open-circuit voltage */
 static s64 cosmo_fg_ocv_charge(struct cosmo_fg *fg, int ocv_uv)
 {
-	int pct = power_supply_batinfo_ocv2cap(fg->bat, ocv_uv, 25);
+	int temp = fg->bat->ocv_temp[0];
+	int pct = power_supply_batinfo_ocv2cap(fg->bat, ocv_uv, temp);
 
 	if (pct < 0)
 		pct = 0;
@@ -176,7 +177,7 @@ static s64 cosmo_fg_ocv_charge(struct cosmo_fg *fg, int ocv_uv)
 
 static void cosmo_fg_update(struct cosmo_fg *fg)
 {
-	s64 full = fg->bat->charge_full_design_uah, target;
+	s64 full = fg->bat->charge_full_design_uah, target, diff;
 	int ua, uah, mv, online, chg_status, capacity, status, ret;
 	bool changed;
 
@@ -218,6 +219,11 @@ static void cosmo_fg_update(struct cosmo_fg *fg)
 			else
 				fg->charge_uah += div_s64(target - fg->charge_uah, FG_PULL_SLOW);
 		}
+
+		/* If Coulomb counter drifts from OCV target by > 16%, pull towards target */
+		diff = target - fg->charge_uah;
+		if (diff > div_s64(full, 6) || diff < -div_s64(full, 6))
+			fg->charge_uah += div_s64(diff, 4);
 	}
 	fg->car_uah = uah;
 	fg->charge_uah = clamp_t(s64, fg->charge_uah, 0, full);
