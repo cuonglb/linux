@@ -237,24 +237,32 @@ void ssusb_mode_switch(struct ssusb_mtk *ssusb, int to_host)
 void ssusb_set_force_mode(struct ssusb_mtk *ssusb,
 			  enum mtu3_dr_force_mode mode)
 {
+	enum phy_mode phy_mode;
 	u32 value;
+	int i;
 
 	value = mtu3_readl(ssusb->ippc_base, SSUSB_U2_CTRL(0));
 	switch (mode) {
 	case MTU3_DR_FORCE_DEVICE:
 		value |= SSUSB_U2_PORT_FORCE_IDDIG | SSUSB_U2_PORT_RG_IDDIG;
+		phy_mode = PHY_MODE_USB_DEVICE;
 		break;
 	case MTU3_DR_FORCE_HOST:
 		value |= SSUSB_U2_PORT_FORCE_IDDIG;
 		value &= ~SSUSB_U2_PORT_RG_IDDIG;
+		phy_mode = PHY_MODE_USB_HOST;
 		break;
 	case MTU3_DR_FORCE_NONE:
 		value &= ~(SSUSB_U2_PORT_FORCE_IDDIG | SSUSB_U2_PORT_RG_IDDIG);
+		phy_mode = PHY_MODE_USB_OTG;
 		break;
 	default:
 		return;
 	}
 	mtu3_writel(ssusb->ippc_base, SSUSB_U2_CTRL(0), value);
+
+	for (i = 0; i < ssusb->num_phys; i++)
+		phy_set_mode(ssusb->phys[i], phy_mode);
 }
 
 static int ssusb_role_sw_set(struct usb_role_switch *sw, enum usb_role role)

@@ -593,6 +593,7 @@
 		tcpc {
 			compatible = "mediatek,mt6370-tcpc";
 			interrupts-extended = <&pio 41 IRQ_TYPE_LEVEL_LOW>;
+			vbus-supply = <&mt6370_otg_vbus>;
 
 			connector {
 				compatible = "usb-c-connector";
@@ -701,9 +702,9 @@
 	pinctrl-0 = <&usb_default_pins>;
 	status = "okay";
 	mediatek,u3p-dis-msk = <1>;
-	/* pennyos debug: force unconditional peripheral so the USB gadget (ttyGS0)
-	   is a reliable "reached USB init" signal, decoupled from mt6370 TCPC/role-switch */
-	dr_mode = "peripheral";
+	dr_mode = "otg";
+	usb-role-switch;
+	role-switch-default-mode = "peripheral";
 	vusb33-supply = <&mt6358_vusb_reg>;
 	wakeup-source;
 
@@ -895,6 +896,11 @@
 		pins-lr-switch {
 			pinmux = <PINMUX_GPIO79__FUNC_GPIO79>;
 			output-low; /* left USB port */
+		};
+
+		pins-u3-switch {
+			pinmux = <PINMUX_GPIO177__FUNC_GPIO177>;
+			output-low; /* disable right port HDMI switch */
 		};
 	};
 };

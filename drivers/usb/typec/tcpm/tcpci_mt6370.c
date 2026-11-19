@@ -6,10 +6,12 @@
  */
 
 #include <linux/bits.h>
+#include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_wakeup.h>
 #include <linux/pm_wakeirq.h>
@@ -50,7 +52,7 @@ static const struct reg_sequence mt6370_reg_init[] = {
 
 static int mt6370_tcpc_init(struct tcpci *tcpci, struct tcpci_data *data)
 {
-	u16 did;
+	u16 did, alert_clr = 0xffff, alert_mask = 0x007f;
 	int ret;
 
 	ret = regmap_register_patch(data->regmap, mt6370_reg_init,
@@ -62,8 +64,17 @@ static int mt6370_tcpc_init(struct tcpci *tcpci, struct tcpci_data *data)
 	if (ret)
 		return ret;
 
-	if (did == MT6370_TCPC_DID_A)
-		return regmap_write(data->regmap, TCPC_FAULT_CTRL, 0x80);
+	if (did == MT6370_TCPC_DID_A) {
+		ret = regmap_write(data->regmap, TCPC_FAULT_CTRL, 0x80);
+		if (ret)
+			return ret;
+	}
+
+	/* Mask fault status alerts and clear any initial reset/fault flags */
+	regmap_write(data->regmap, TCPC_FAULT_STATUS_MASK, 0x00);
+	regmap_write(data->regmap, TCPC_FAULT_STATUS, 0xff);
+	regmap_raw_write(data->regmap, TCPC_ALERT, &alert_clr, sizeof(u16));
+	regmap_raw_write(data->regmap, TCPC_ALERT_MASK, &alert_mask, sizeof(u16));
 
 	return 0;
 }
@@ -81,17 +92,31 @@ static int mt6370_tcpc_set_vbus(struct tcpci *tcpci, struct tcpci_data *data,
 {
 	struct mt6370_priv *priv = container_of(data, struct mt6370_priv,
 						tcpci_data);
+	bool is_enabled;
 	int ret;
 
 	ret = regulator_is_enabled(priv->vbus);
 	if (ret < 0)
 		return ret;
 
-	if (ret && !source)
-		return regulator_disable(priv->vbus);
+	is_enabled = ret > 0;
 
-	if (!ret && source)
-		return regulator_enable(priv->vbus);
+	if (is_enabled && !source) {
+		ret = regulator_disable(priv->vbus);
+		if (ret)
+			return ret;
+	}
+
+	if (!is_enabled && source) {
+		ret = regulator_enable(priv->vbus);
+		if (ret)
+			return ret;
+		/* Wait for MT6370 OTG boost converter to reach 5V VBUS_PRES */
+		msleep(20);
+	}
+
+	if (source && priv->tcpci)
+		tcpm_sourcing_vbus(tcpci_get_tcpm_port(priv->tcpci));
 
 	return 0;
 }
@@ -99,8 +124,22 @@ static int mt6370_tcpc_set_vbus(struct tcpci *tcpci, struct tcpci_data *data,
 static irqreturn_t mt6370_irq_handler(int irq, void *dev_id)
 {
 	struct mt6370_priv *priv = dev_id;
+	struct regmap *regmap = priv->tcpci_data.regmap;
+	u16 alert = 0;
 
-	return tcpci_irq(priv->tcpci);
+	if (!regmap_raw_read(regmap, TCPC_ALERT, &alert, sizeof(u16))) {
+		if (alert & TCPC_ALERT_FAULT) {
+			u16 clr = TCPC_ALERT_FAULT;
+			unsigned int fs = 0;
+
+			regmap_read(regmap, TCPC_FAULT_STATUS, &fs);
+			regmap_write(regmap, TCPC_FAULT_STATUS, fs | 0xff);
+			regmap_raw_write(regmap, TCPC_ALERT, &clr, sizeof(u16));
+		}
+	}
+
+	tcpci_irq(priv->tcpci);
+	return IRQ_HANDLED;
 }
 
 static int mt6370_check_vendor_info(struct mt6370_priv *priv)
@@ -149,12 +188,29 @@ static int mt6370_tcpc_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	/* Assign TCPCI feature and ops */
-	priv->tcpci_data.auto_discharge_disconnect = 1;
+	/*
+	 * MT6370 implements TCPCI v1.0 (registers 0x00..0x6f) and does not have
+	 * TCPC_VBUS_SINK_DISCONNECT_THRESH (0x72). Leave auto_discharge_disconnect
+	 * disabled to avoid I2C_ERROR / AUTO_DISC_FAIL fault storms and allow normal
+	 * CC disconnect detection in Sink mode.
+	 */
+	priv->tcpci_data.auto_discharge_disconnect = 0;
 	priv->tcpci_data.init = mt6370_tcpc_init;
 	priv->tcpci_data.set_vconn = mt6370_tcpc_set_vconn;
 
 	priv->vbus = devm_regulator_get_optional(dev, "vbus");
+	if (IS_ERR(priv->vbus)) {
+		struct device_node *child = of_get_child_by_name(dev->of_node, "connector");
+
+		if (child) {
+			struct device_node *orig_np = dev->of_node;
+
+			dev->of_node = child;
+			priv->vbus = devm_regulator_get_optional(dev, "vbus");
+			dev->of_node = orig_np;
+			of_node_put(child);
+		}
+	}
 	if (!IS_ERR(priv->vbus))
 		priv->tcpci_data.set_vbus = mt6370_tcpc_set_vbus;
 

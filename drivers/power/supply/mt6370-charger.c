@@ -439,8 +439,7 @@ static int mt6370_chg_get_status(struct mt6370_priv *priv,
 	unsigned int chg_stat;
 	union power_supply_propval online;
 
-	ret = power_supply_get_property(priv->psy, POWER_SUPPLY_PROP_ONLINE,
-					&online);
+	ret = mt6370_chg_get_online(priv, &online);
 	if (ret) {
 		dev_err(priv->dev, "Failed to get online status\n");
 		return ret;
@@ -891,10 +890,6 @@ static int mt6370_chg_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to init OTG regulator\n");
 
-	ret = mt6370_chg_init_psy(priv);
-	if (ret)
-		return dev_err_probe(dev, ret, "Failed to init psy\n");
-
 	mutex_init(&priv->attach_lock);
 	ret = devm_add_action_or_reset(dev, mt6370_chg_destroy_attach_lock,
 				       &priv->attach_lock);
@@ -902,6 +897,10 @@ static int mt6370_chg_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret, "Failed to init attach lock\n");
 
 	priv->attach = MT6370_ATTACH_STAT_DETACH;
+
+	ret = mt6370_chg_init_psy(priv);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to init psy\n");
 
 	priv->wq = create_singlethread_workqueue(dev_name(priv->dev));
 	if (!priv->wq)

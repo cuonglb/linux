@@ -504,7 +504,8 @@ static int tcpci_get_vbus(struct tcpc_dev *tcpc)
 	if (ret < 0)
 		return ret;
 
-	return !!(reg & TCPC_POWER_STATUS_VBUS_PRES);
+	return !!(reg & (TCPC_POWER_STATUS_VBUS_PRES |
+			 TCPC_POWER_STATUS_SOURCING_VBUS));
 }
 
 static bool tcpci_is_vbus_vsafe0v(struct tcpc_dev *tcpc)
@@ -708,7 +709,7 @@ static int tcpci_init(struct tcpc_dev *tcpc)
 
 	tcpci->alert_mask = reg;
 
-	return 0;
+	return tcpci_write16(tcpci, TCPC_ALERT_MASK, reg);
 }
 
 irqreturn_t tcpci_irq(struct tcpci *tcpci)
@@ -722,6 +723,11 @@ irqreturn_t tcpci_irq(struct tcpci *tcpci)
 	irq_ret = status & tcpci->alert_mask;
 
 process_status:
+	if (status & TCPC_ALERT_FAULT) {
+		regmap_read(tcpci->regmap, TCPC_FAULT_STATUS, &raw);
+		regmap_write(tcpci->regmap, TCPC_FAULT_STATUS, raw | 0xff);
+	}
+
 	/*
 	 * Clear alert status for everything except RX_STATUS, which shouldn't
 	 * be cleared until we have successfully retrieved message.
