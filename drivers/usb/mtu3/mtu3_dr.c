@@ -14,6 +14,12 @@
 #define USB2_PORT 2
 #define USB3_PORT 3
 
+static int ssusb_match_xhci_child(struct device *dev, void *data)
+{
+	return of_device_is_compatible(dev->of_node, "mediatek,mtk-xhci") ||
+	       of_device_is_compatible(dev->of_node, "mediatek,mt8183-xhci");
+}
+
 static inline struct ssusb_mtk *otg_sx_to_ssusb(struct otg_switch_mtk *otg_sx)
 {
 	return container_of(otg_sx, struct ssusb_mtk, otg_switch);
@@ -150,20 +156,47 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 	pm_runtime_get_sync(ssusb->dev);
 
 	switch (desired_role) {
-	case USB_ROLE_HOST:
+	case USB_ROLE_HOST: {
+		struct device *xhci_dev;
+
 		ssusb_set_force_mode(ssusb, MTU3_DR_FORCE_HOST);
 		mtu3_stop(mtu);
 		switch_port_to_host(ssusb);
+		xhci_dev = device_find_child(ssusb->dev, NULL,
+					     ssusb_match_xhci_child);
+		if (xhci_dev) {
+			int ret = device_attach(xhci_dev);
+
+			if (ret < 0)
+				dev_err(ssusb->dev,
+					"failed to attach xhci host: %d\n", ret);
+			put_device(xhci_dev);
+		}
 		ssusb_set_vbus(otg_sx, 1);
 		ssusb->is_host = true;
 		break;
-	case USB_ROLE_DEVICE:
-		ssusb_set_force_mode(ssusb, MTU3_DR_FORCE_DEVICE);
+	}
+	case USB_ROLE_DEVICE: {
+		struct device *xhci_dev;
+
 		ssusb->is_host = false;
 		ssusb_set_vbus(otg_sx, 0);
+		/*
+		 * Tear down xhci-mtk cleanly while host mode/PHY are still active
+		 * so multi-interface devices finish disconnect/stop-endpoint
+		 * before port0 switches to device mode.
+		 */
+		xhci_dev = device_find_child(ssusb->dev, NULL,
+					     ssusb_match_xhci_child);
+		if (xhci_dev) {
+			device_release_driver(xhci_dev);
+			put_device(xhci_dev);
+		}
+		ssusb_set_force_mode(ssusb, MTU3_DR_FORCE_DEVICE);
 		switch_port_to_device(ssusb);
 		mtu3_start(mtu);
 		break;
+	}
 	case USB_ROLE_NONE:
 	default:
 		dev_err(ssusb->dev, "invalid role\n");
