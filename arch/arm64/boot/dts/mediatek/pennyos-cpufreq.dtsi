@@ -1,0 +1,321 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR MIT)
+/*
+ * Cosmo Communicator (MT6771 / Helio P70) CPUFreq + CCI DevFreq OPP tables.
+ *
+ * Adapted from the verified MT6771 Cosmo port (fy5tTbl / V5_T):
+ * - Stock frequencies + max(base table, EEM-adjusted voltage).
+ * - MT6358 hardware auto-tracking maintains Vsram = clamp(Vproc + 100 mV, 0.900V, 1.11875V),
+ *   so sram-supply is removed from &cci and &cpu0..7 to avoid fighting HW tracking.
+ * - CCI intermediate clock uses clk26m (26 MHz) instead of mainpll (1092 MHz).
+ */
+
+/ {
+	cosmo_cl0_opp: opp-table-cosmo-cluster0 {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp-793000000 {
+			opp-hz = /bits/ 64 <793000000>;
+			opp-microvolt = <600000>;
+			required-opps = <&cosmo_cci_273>;
+		};
+		opp-910000000 {
+			opp-hz = /bits/ 64 <910000000>;
+			opp-microvolt = <637500>;
+			required-opps = <&cosmo_cci_338>;
+		};
+		opp-1014000000 {
+			opp-hz = /bits/ 64 <1014000000>;
+			opp-microvolt = <668750>;
+			required-opps = <&cosmo_cci_403>;
+		};
+		opp-1131000000 {
+			opp-hz = /bits/ 64 <1131000000>;
+			opp-microvolt = <706250>;
+			required-opps = <&cosmo_cci_481>;
+		};
+		opp-1248000000 {
+			opp-hz = /bits/ 64 <1248000000>;
+			opp-microvolt = <737500>;
+			required-opps = <&cosmo_cci_546>;
+		};
+		opp-1326000000 {
+			opp-hz = /bits/ 64 <1326000000>;
+			opp-microvolt = <768750>;
+			required-opps = <&cosmo_cci_624>;
+		};
+		opp-1417000000 {
+			opp-hz = /bits/ 64 <1417000000>;
+			opp-microvolt = <800000>;
+			required-opps = <&cosmo_cci_689>;
+		};
+		opp-1508000000 {
+			opp-hz = /bits/ 64 <1508000000>;
+			opp-microvolt = <818750>;
+			required-opps = <&cosmo_cci_767>;
+		};
+		opp-1586000000 {
+			opp-hz = /bits/ 64 <1586000000>;
+			opp-microvolt = <843750>;
+			required-opps = <&cosmo_cci_845>;
+		};
+		opp-1625000000 {
+			opp-hz = /bits/ 64 <1625000000>;
+			opp-microvolt = <856250>;
+			required-opps = <&cosmo_cci_871>;
+		};
+		opp-1677000000 {
+			opp-hz = /bits/ 64 <1677000000>;
+			opp-microvolt = <881250>;
+			required-opps = <&cosmo_cci_923>;
+		};
+		opp-1716000000 {
+			opp-hz = /bits/ 64 <1716000000>;
+			opp-microvolt = <893750>;
+			required-opps = <&cosmo_cci_962>;
+		};
+		opp-1781000000 {
+			opp-hz = /bits/ 64 <1781000000>;
+			opp-microvolt = <925000>;
+			required-opps = <&cosmo_cci_1027>;
+		};
+		opp-1846000000 {
+			opp-hz = /bits/ 64 <1846000000>;
+			opp-microvolt = <950000>;
+			required-opps = <&cosmo_cci_1092>;
+		};
+		opp-1924000000 {
+			opp-hz = /bits/ 64 <1924000000>;
+			opp-microvolt = <975000>;
+			required-opps = <&cosmo_cci_1144>;
+		};
+		opp-1989000000 {
+			opp-hz = /bits/ 64 <1989000000>;
+			opp-microvolt = <1000000>;
+			required-opps = <&cosmo_cci_1196>;
+		};
+	};
+
+	cosmo_cl1_opp: opp-table-cosmo-cluster1 {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp-793000000 {
+			opp-hz = /bits/ 64 <793000000>;
+			opp-microvolt = <706250>;
+			required-opps = <&cosmo_cci_273>;
+		};
+		opp-910000000 {
+			opp-hz = /bits/ 64 <910000000>;
+			opp-microvolt = <731250>;
+			required-opps = <&cosmo_cci_338>;
+		};
+		opp-1014000000 {
+			opp-hz = /bits/ 64 <1014000000>;
+			opp-microvolt = <756250>;
+			required-opps = <&cosmo_cci_403>;
+		};
+		opp-1131000000 {
+			opp-hz = /bits/ 64 <1131000000>;
+			opp-microvolt = <781250>;
+			required-opps = <&cosmo_cci_481>;
+		};
+		opp-1248000000 {
+			opp-hz = /bits/ 64 <1248000000>;
+			opp-microvolt = <812500>;
+			required-opps = <&cosmo_cci_546>;
+		};
+		opp-1326000000 {
+			opp-hz = /bits/ 64 <1326000000>;
+			opp-microvolt = <831250>;
+			required-opps = <&cosmo_cci_624>;
+		};
+		opp-1417000000 {
+			opp-hz = /bits/ 64 <1417000000>;
+			opp-microvolt = <856250>;
+			required-opps = <&cosmo_cci_689>;
+		};
+		opp-1508000000 {
+			opp-hz = /bits/ 64 <1508000000>;
+			opp-microvolt = <868750>;
+			required-opps = <&cosmo_cci_767>;
+		};
+		opp-1586000000 {
+			opp-hz = /bits/ 64 <1586000000>;
+			opp-microvolt = <893750>;
+			required-opps = <&cosmo_cci_845>;
+		};
+		opp-1651000000 {
+			opp-hz = /bits/ 64 <1651000000>;
+			opp-microvolt = <906250>;
+			required-opps = <&cosmo_cci_871>;
+		};
+		opp-1716000000 {
+			opp-hz = /bits/ 64 <1716000000>;
+			opp-microvolt = <925000>;
+			required-opps = <&cosmo_cci_923>;
+		};
+		opp-1781000000 {
+			opp-hz = /bits/ 64 <1781000000>;
+			opp-microvolt = <950000>;
+			required-opps = <&cosmo_cci_962>;
+		};
+		opp-1846000000 {
+			opp-hz = /bits/ 64 <1846000000>;
+			opp-microvolt = <975000>;
+			required-opps = <&cosmo_cci_1027>;
+		};
+		opp-1924000000 {
+			opp-hz = /bits/ 64 <1924000000>;
+			opp-microvolt = <1000000>;
+			required-opps = <&cosmo_cci_1092>;
+		};
+		opp-1989000000 {
+			opp-hz = /bits/ 64 <1989000000>;
+			opp-microvolt = <1025000>;
+			required-opps = <&cosmo_cci_1144>;
+		};
+		opp-2106000000 {
+			opp-hz = /bits/ 64 <2106000000>;
+			opp-microvolt = <1050000>;
+			required-opps = <&cosmo_cci_1196>;
+		};
+	};
+
+	cosmo_cci_opp: opp-table-cosmo-cci {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		cosmo_cci_273: opp-273000000 {
+			opp-hz = /bits/ 64 <273000000>;
+			opp-microvolt = <600000>;
+		};
+		cosmo_cci_338: opp-338000000 {
+			opp-hz = /bits/ 64 <338000000>;
+			opp-microvolt = <637500>;
+		};
+		cosmo_cci_403: opp-403000000 {
+			opp-hz = /bits/ 64 <403000000>;
+			opp-microvolt = <668750>;
+		};
+		cosmo_cci_481: opp-481000000 {
+			opp-hz = /bits/ 64 <481000000>;
+			opp-microvolt = <706250>;
+		};
+		cosmo_cci_546: opp-546000000 {
+			opp-hz = /bits/ 64 <546000000>;
+			opp-microvolt = <737500>;
+		};
+		cosmo_cci_624: opp-624000000 {
+			opp-hz = /bits/ 64 <624000000>;
+			opp-microvolt = <768750>;
+		};
+		cosmo_cci_689: opp-689000000 {
+			opp-hz = /bits/ 64 <689000000>;
+			opp-microvolt = <800000>;
+		};
+		cosmo_cci_767: opp-767000000 {
+			opp-hz = /bits/ 64 <767000000>;
+			opp-microvolt = <818750>;
+		};
+		cosmo_cci_845: opp-845000000 {
+			opp-hz = /bits/ 64 <845000000>;
+			opp-microvolt = <843750>;
+		};
+		cosmo_cci_871: opp-871000000 {
+			opp-hz = /bits/ 64 <871000000>;
+			opp-microvolt = <856250>;
+		};
+		cosmo_cci_923: opp-923000000 {
+			opp-hz = /bits/ 64 <923000000>;
+			opp-microvolt = <881250>;
+		};
+		cosmo_cci_962: opp-962000000 {
+			opp-hz = /bits/ 64 <962000000>;
+			opp-microvolt = <893750>;
+		};
+		cosmo_cci_1027: opp-1027000000 {
+			opp-hz = /bits/ 64 <1027000000>;
+			opp-microvolt = <925000>;
+		};
+		cosmo_cci_1092: opp-1092000000 {
+			opp-hz = /bits/ 64 <1092000000>;
+			opp-microvolt = <950000>;
+		};
+		cosmo_cci_1144: opp-1144000000 {
+			opp-hz = /bits/ 64 <1144000000>;
+			opp-microvolt = <975000>;
+		};
+		cosmo_cci_1196: opp-1196000000 {
+			opp-hz = /bits/ 64 <1196000000>;
+			opp-microvolt = <1000000>;
+		};
+	};
+};
+
+&cpu0 {
+	/delete-property/ sram-supply;
+	operating-points-v2 = <&cosmo_cl0_opp>;
+	proc-supply = <&mt6358_vproc12_reg>;
+};
+
+&cpu1 {
+	/delete-property/ sram-supply;
+	operating-points-v2 = <&cosmo_cl0_opp>;
+	proc-supply = <&mt6358_vproc12_reg>;
+};
+
+&cpu2 {
+	/delete-property/ sram-supply;
+	operating-points-v2 = <&cosmo_cl0_opp>;
+	proc-supply = <&mt6358_vproc12_reg>;
+};
+
+&cpu3 {
+	/delete-property/ sram-supply;
+	operating-points-v2 = <&cosmo_cl0_opp>;
+	proc-supply = <&mt6358_vproc12_reg>;
+};
+
+&cpu4 {
+	/delete-property/ sram-supply;
+	operating-points-v2 = <&cosmo_cl1_opp>;
+	proc-supply = <&mt6358_vproc11_reg>;
+};
+
+&cpu5 {
+	/delete-property/ sram-supply;
+	operating-points-v2 = <&cosmo_cl1_opp>;
+	proc-supply = <&mt6358_vproc11_reg>;
+};
+
+&cpu6 {
+	/delete-property/ sram-supply;
+	operating-points-v2 = <&cosmo_cl1_opp>;
+	proc-supply = <&mt6358_vproc11_reg>;
+};
+
+&cpu7 {
+	/delete-property/ sram-supply;
+	operating-points-v2 = <&cosmo_cl1_opp>;
+	proc-supply = <&mt6358_vproc11_reg>;
+};
+
+&cci {
+	/delete-property/ sram-supply;
+	clocks = <&mcucfg CLK_MCU_BUS_SEL>, <&clk26m>;
+	clock-names = "cci", "intermediate";
+	operating-points-v2 = <&cosmo_cci_opp>;
+	proc-supply = <&mt6358_vproc12_reg>;
+};
+
+/* Clamp Vproc rails strictly to the verified Cosmo table ranges */
+&mt6358_vproc11_reg {
+	regulator-min-microvolt = <706250>;
+	regulator-max-microvolt = <1050000>;
+};
+
+&mt6358_vproc12_reg {
+	regulator-min-microvolt = <600000>;
+	regulator-max-microvolt = <1000000>;
+};

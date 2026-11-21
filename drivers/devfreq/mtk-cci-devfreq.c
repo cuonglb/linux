@@ -4,12 +4,15 @@
  */
 
 #include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/devfreq.h>
+#include <linux/mfd/syscon.h>
 #include <linux/minmax.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_opp.h>
+#include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 
 struct mtk_ccifreq_platform_data {
@@ -86,7 +89,7 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 						      soc_data->sram_max_volt);
 				return ret;
 			}
-		} else if (pre_voltage > new_voltage) {
+		} else {
 			voltage = max(new_voltage,
 				      pre_vsram - soc_data->max_volt_shift);
 			ret = regulator_set_voltage(drv->proc_reg, voltage,
@@ -246,6 +249,62 @@ static struct devfreq_dev_profile mtk_ccifreq_profile = {
 	.target = mtk_ccifreq_target,
 };
 
+/*
+ * Cosmo Communicator (MT6771): LK leaves the CCI at ccipll 1196 MHz with
+ * the MCUCFG bus divider (BUS_PLL_DIVIDER_CFG [21:17]) at /2, a real
+ * 598 MHz. clk-mt8183 models the mux but not this divider, so every rate
+ * set here would be halved. Move to ccipll 598 MHz with the divider at /1
+ * once at probe so the real rate goes 598 -> 299 -> 598 MHz and never above.
+ */
+#define COSMO_BUS_DIV_REG	0x7c0
+#define COSMO_BUS_DIV_MASK	GENMASK(21, 17)
+#define COSMO_BUS_DIV_SEL(v)	(((v) & COSMO_BUS_DIV_MASK) >> 17)
+#define COSMO_DIV_1		8
+#define COSMO_DIV_2		10
+
+static int cosmo_cci_divider_fix(struct device *dev, struct clk *cci_clk)
+{
+	struct regmap *mcucfg;
+	struct clk *pll;
+	unsigned int val;
+	int ret;
+
+	if (!of_machine_is_compatible("planet,cosmocom") &&
+	    !of_machine_is_compatible("planet,cosmo-communicator"))
+		return 0;
+
+	mcucfg = syscon_regmap_lookup_by_compatible("mediatek,mt8183-mcucfg");
+	if (IS_ERR(mcucfg))
+		return dev_err_probe(dev, PTR_ERR(mcucfg), "cosmo: no mcucfg\n");
+
+	ret = regmap_read(mcucfg, COSMO_BUS_DIV_REG, &val);
+	if (ret)
+		return ret;
+	if (COSMO_BUS_DIV_SEL(val) == COSMO_DIV_1)
+		return 0;
+
+	pll = clk_get_parent(cci_clk);
+	if (COSMO_BUS_DIV_SEL(val) != COSMO_DIV_2 || !pll ||
+	    clk_get_rate(pll) != 1196000000UL) {
+		dev_err(dev, "cosmo: unexpected CCI state (div 0x%08x, pll %lu)\n",
+			val, pll ? clk_get_rate(pll) : 0);
+		return -EINVAL;
+	}
+
+	ret = clk_set_rate(pll, 598000000UL);
+	if (ret)
+		return ret;
+	udelay(20);
+	ret = regmap_update_bits(mcucfg, COSMO_BUS_DIV_REG, COSMO_BUS_DIV_MASK,
+				 COSMO_DIV_1 << 17);
+	if (ret)
+		return ret;
+	udelay(1);
+	regmap_read(mcucfg, COSMO_BUS_DIV_REG, &val);
+	dev_info(dev, "cosmo: CCI divider /2 -> /1 at 598 MHz (div 0x%08x)\n", val);
+	return COSMO_BUS_DIV_SEL(val) == COSMO_DIV_1 ? 0 : -EIO;
+}
+
 static int mtk_ccifreq_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -277,6 +336,10 @@ static int mtk_ccifreq_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret,
 				     "failed to get intermediate clk\n");
 	}
+
+	ret = cosmo_cci_divider_fix(dev, drv->cci_clk);
+	if (ret)
+		return ret;
 
 	drv->proc_reg = devm_regulator_get_optional(dev, "proc");
 	if (IS_ERR(drv->proc_reg)) {

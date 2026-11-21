@@ -929,4 +929,6 @@
 
 #include "pennyos-codi.dtsi"
 
+#include "pennyos-cpufreq.dtsi"
+
 #include "mt6771-mtk-lk-compat.dtsi"
