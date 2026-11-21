@@ -521,6 +521,9 @@
 				      <&mt6370_adc MT6370_CHAN_IBAT>,
 				      <&mt6370_adc MT6370_CHAN_CHG_VDDP>,
 				      <&mt6370_adc MT6370_CHAN_TEMP_JC>;
+			monitored-battery = <&cosmo_battery>;
+			cosmo,u2phy-bc11-reg = <0x11f40318>;
+			cosmo,pd-port = <&mt6370_tcpc>;
 
 			mt6370_otg_vbus: usb-otg-vbus-regulator {
 				regulator-name = "mt6370-usb-otg-vbus";
@@ -590,7 +593,7 @@
 			};
 		};
 
-		tcpc {
+		mt6370_tcpc: tcpc {
 			compatible = "mediatek,mt6370-tcpc";
 			interrupts-extended = <&pio 41 IRQ_TYPE_LEVEL_LOW>;
 			vbus-supply = <&mt6370_otg_vbus>;

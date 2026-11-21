@@ -95,6 +95,7 @@ struct mt6359_auxadc {
 	const struct mtk_pmic_auxadc_info *chip_info;
 	struct mutex lock;
 	bool timed_out;
+	int bat_temp_last_mv;	/* Cosmo: last BAT_TEMP result, 0 = none */
 };
 
 /**
@@ -478,6 +479,51 @@ static int mt6359_auxadc_read_adc(struct mt6359_auxadc *adc_dev,
 	return 0;
 }
 
+static int mt6359_auxadc_raw_to_mv(struct mt6359_auxadc *adc_dev,
+				   const struct iio_chan_spec *chan, int raw)
+{
+	const struct mtk_pmic_auxadc_info *cinfo = adc_dev->chip_info;
+	const struct mtk_pmic_auxadc_chan *desc = &cinfo->desc[chan->scan_index];
+	s64 mv = (s64)raw * desc->r_ratio.numerator * AUXADC_VOLT_FULL;
+
+	if (desc->r_ratio.denominator > 1)
+		mv = div_s64(mv, desc->r_ratio.denominator);
+	return (int)(mv >> chan->scan_type.realbits);
+}
+
+/* Cosmo: vendor BAT_TEMP glitch guard; caller holds adc_dev->lock */
+static int mt6359_auxadc_bat_temp_guard(struct mt6359_auxadc *adc_dev,
+					const struct iio_chan_spec *chan,
+					int *val)
+{
+	int mv = mt6359_auxadc_raw_to_mv(adc_dev, chan, *val);
+	int last = adc_dev->bat_temp_last_mv;
+	int arr[5], sum = 0, min_v, max_v, i, ret;
+
+	if (last && (mv < 200 || abs(mv - last) > 100)) {
+		for (i = 0; i < ARRAY_SIZE(arr); i++) {
+			ret = mt6359_auxadc_read_adc(adc_dev, chan, &arr[i]);
+			if (ret)
+				return ret;
+		}
+		min_v = max_v = arr[0];
+		for (i = 0; i < ARRAY_SIZE(arr); i++) {
+			sum += arr[i];
+			min_v = min_t(int, min_v, arr[i]);
+			max_v = max_t(int, max_v, arr[i]);
+		}
+		*val = (sum - min_v - max_v) / (ARRAY_SIZE(arr) - 2);
+		dev_warn_ratelimited(adc_dev->dev,
+				     "BAT_TEMP jump %d -> %d mV, re-read: %d mV\n",
+				     last, mv,
+				     mt6359_auxadc_raw_to_mv(adc_dev, chan, *val));
+		mv = mt6359_auxadc_raw_to_mv(adc_dev, chan, *val);
+	}
+
+	adc_dev->bat_temp_last_mv = mv;
+	return 0;
+}
+
 static int mt6359_auxadc_read_label(struct iio_dev *indio_dev,
 				    const struct iio_chan_spec *chan, char *label)
 {
@@ -514,6 +560,8 @@ static int mt6359_auxadc_read_raw(struct iio_dev *indio_dev,
 			break;
 		default:
 			ret = mt6359_auxadc_read_adc(adc_dev, chan, val);
+			if (!ret && chan->scan_index == PMIC_AUXADC_CHAN_BAT_TEMP)
+				ret = mt6359_auxadc_bat_temp_guard(adc_dev, chan, val);
 			break;
 		}
 	}

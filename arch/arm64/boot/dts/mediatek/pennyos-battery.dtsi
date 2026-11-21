@@ -8,6 +8,7 @@
  * them the cell holds 3658 mAh. Internal resistance at half charge is
  * 155 mOhm, plus 50 mOhm of board path to the voltage sense point.
  */
+#include <dt-bindings/iio/adc/mediatek,mt6358-auxadc.h>
 #include <dt-bindings/iio/adc/mediatek,mt6370_adc.h>
 
 / {
@@ -17,6 +18,8 @@
 		charge-full-design-microamp-hours = <3657919>;
 		voltage-min-design-microvolt = <3400000>;
 		constant-charge-voltage-max-microvolt = <4200000>;
+		constant-charge-current-max-microamp = <2000000>;
+		charge-term-current-microamp = <150000>;
 		factory-internal-resistance-micro-ohms = <204600>;
 		ocv-capacity-celsius = <25>;
 		ocv-capacity-table-0 = <
@@ -50,5 +53,51 @@
 		monitored-battery = <&cosmo_battery>;
 		io-channels = <&mt6370_adc MT6370_CHAN_VBAT>;
 		io-channel-names = "vbat";
+	};
+
+	battery_ntc: thermal-sensor-battery {
+		compatible = "generic-adc-thermal";
+		#thermal-sensor-cells = <0>;
+		io-channels = <&pmic_adc MT6358_AUXADC_BAT_TEMP>;
+		io-channel-names = "sensor-channel";
+		temperature-lookup-table = <
+			(-40000) 10215676
+			(-35000) 9870092
+			(-30000) 9464743
+			(-25000) 9001485
+			(-20000) 8484627
+			(-15000) 7924032
+			(-10000) 7330058
+			(-5000) 6714236
+			0 6094794
+			5000 5487809
+			10000 4903633
+			15000 4351584
+			20000 3840098
+			25000 3373176
+			30000 2951047
+			35000 2574810
+			40000 2242709
+			45000 1950136
+			50000 1694602
+			55000 1472388
+			60000 1279594
+		>;
+	};
+};
+
+&thermal_zones {
+	battery-thermal {
+		polling-delay = <1000>;
+		polling-delay-passive = <0>;
+		thermal-sensors = <&battery_ntc>;
+
+		trips {
+			battery_crit: battery-crit {
+				temperature = <60000>;
+				hysteresis = <2000>;
+				type = "critical";
+			};
+		};
 	};
 };
