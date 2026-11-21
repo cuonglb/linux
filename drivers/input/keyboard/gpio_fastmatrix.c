@@ -75,6 +75,7 @@ struct gpio_keyboard {
 	bool gpio_all_disabled;
 	bool scan_pending;
 	bool stopped;
+	bool irqs_enabled;
 };
 
 static int activate_one_column(struct gpio_keyboard *gkb, int col, bool wait)
@@ -151,7 +152,7 @@ static int deactivate_all_cols(struct gpio_keyboard *gkb)
 	return ret;
 }
 
-static void enable_row_irqs(struct gpio_keyboard *gkb)
+static void __enable_row_irqs(struct gpio_keyboard *gkb)
 {
 	int i;
 
@@ -161,9 +162,10 @@ static void enable_row_irqs(struct gpio_keyboard *gkb)
 		for (i = 0; i < gkb->row_gpios->ndescs; i++)
 			enable_irq(gpiod_to_irq(gkb->row_gpios->desc[i]));
 	}
+	gkb->irqs_enabled = true;
 }
 
-static void disable_row_irqs(struct gpio_keyboard *gkb)
+static void __disable_row_irqs(struct gpio_keyboard *gkb)
 {
 	int i;
 
@@ -173,6 +175,19 @@ static void disable_row_irqs(struct gpio_keyboard *gkb)
 		for (i = 0; i < gkb->row_gpios->ndescs; i++)
 			disable_irq_nosync(gpiod_to_irq(gkb->row_gpios->desc[i]));
 	}
+	gkb->irqs_enabled = false;
+}
+
+static void enable_row_irqs_locked(struct gpio_keyboard *gkb)
+{
+	if (!gkb->irqs_enabled && !gkb->stopped)
+		__enable_row_irqs(gkb);
+}
+
+static void disable_row_irqs_locked(struct gpio_keyboard *gkb)
+{
+	if (gkb->irqs_enabled)
+		__disable_row_irqs(gkb);
 }
 
 /*
@@ -191,10 +206,13 @@ static void gpio_keyboard_scan(struct work_struct *work)
 	int ret, row, col, code;
 	u32 keymask = 0;
 
+	if (READ_ONCE(gkb->stopped))
+		goto stopped_out;
+
 	new_state = kzalloc(gkb->col_gpios->ndescs * sizeof(*new_state),
 			    GFP_KERNEL);
 	if (!new_state)
-		return;
+		goto stopped_out;
 
 	/* de-activate all columns for scanning */
 	deactivate_all_cols(gkb);
@@ -218,6 +236,8 @@ static void gpio_keyboard_scan(struct work_struct *work)
 			deactivate_one_column(gkb, col);
 			activate_all_cols(gkb);
 			kfree(new_state);
+			if (READ_ONCE(gkb->stopped))
+				goto stopped_out;
 			queue_delayed_work(system_highpri_wq, &gkb->work,
 					   msecs_to_jiffies(GKB_READ_RETRY_MS));
 			return;
@@ -228,6 +248,7 @@ static void gpio_keyboard_scan(struct work_struct *work)
 
 		if (deactivate_one_column(gkb, col)) {
 			activate_all_cols(gkb);
+			kfree(new_state);
 			goto end;
 		}
 	}
@@ -274,14 +295,14 @@ static void gpio_keyboard_scan(struct work_struct *work)
 	       gkb->col_gpios->ndescs * sizeof(*new_state));
 	kfree(new_state);
 
-	if (ghost) {
+	if (ghost && !READ_ONCE(gkb->stopped)) {
 		queue_delayed_work(system_highpri_wq, &gkb->work,
 				   msecs_to_jiffies(GKB_GHOST_RESCAN_MS));
 		return;
 	}
 
 	/* Avoid missing key release events on quirky hardware */
-	if (gkb->autorescan_ms && keymask) {
+	if (gkb->autorescan_ms && keymask && !READ_ONCE(gkb->stopped)) {
 		queue_delayed_work(system_highpri_wq, &gkb->work,
 				   msecs_to_jiffies(gkb->autorescan_ms));
 		return;
@@ -290,7 +311,7 @@ end:
 	/* Enable IRQs again */
 	mutex_lock(&gkb->lock);
 	gkb->scan_pending = false;
-	enable_row_irqs(gkb);
+	enable_row_irqs_locked(gkb);
 	mutex_unlock(&gkb->lock);
 
 	/*
@@ -300,19 +321,25 @@ end:
 	 * scan's own reads consumed it. Look once more with every column driven, so
 	 * such a key is picked up now instead of on its next press.
 	 */
-	if (!gkb->stopped &&
+	if (!READ_ONCE(gkb->stopped) &&
 	    !gpiod_get_array_value_cansleep(gkb->row_gpios->ndescs,
 					    gkb->row_gpios->desc,
 					    gkb->row_gpios->info, &row_values) &&
 	    (row_values & GENMASK(gkb->row_gpios->ndescs - 1, 0))) {
 		mutex_lock(&gkb->lock);
 		if (!gkb->scan_pending && !gkb->stopped) {
-			disable_row_irqs(gkb);
+			disable_row_irqs_locked(gkb);
 			gkb->scan_pending = true;
 			mod_delayed_work(system_highpri_wq, &gkb->work, 0);
 		}
 		mutex_unlock(&gkb->lock);
 	}
+	return;
+
+stopped_out:
+	mutex_lock(&gkb->lock);
+	gkb->scan_pending = false;
+	mutex_unlock(&gkb->lock);
 }
 
 static irqreturn_t gpio_keyboard_interrupt(int irq, void *id)
@@ -330,7 +357,7 @@ static irqreturn_t gpio_keyboard_interrupt(int irq, void *id)
 	if (unlikely(gkb->scan_pending || gkb->stopped))
 		goto out;
 
-	disable_row_irqs(gkb);
+	disable_row_irqs_locked(gkb);
 	gkb->scan_pending = true;
 	mod_delayed_work(system_highpri_wq, &gkb->work,
 			 msecs_to_jiffies(gkb->debounce_ms));
@@ -344,13 +371,13 @@ static int gpio_keyboard_start(struct input_dev *dev)
 {
 	struct gpio_keyboard *gkb = input_get_drvdata(dev);
 
-	gkb->stopped = false;
+	mutex_lock(&gkb->lock);
+	WRITE_ONCE(gkb->stopped, false);
+	gkb->scan_pending = true;
+	disable_row_irqs_locked(gkb);
+	mutex_unlock(&gkb->lock);
 
-	/*
-	 * Schedule an immediate key scan to capture current key state;
-	 * columns will be activated and IRQs be enabled after the scan.
-	 */
-	schedule_delayed_work(&gkb->work, 0);
+	mod_delayed_work(system_highpri_wq, &gkb->work, 0);
 
 	return 0;
 }
@@ -360,15 +387,16 @@ static void gpio_keyboard_stop(struct input_dev *dev)
 	struct gpio_keyboard *gkb = input_get_drvdata(dev);
 
 	mutex_lock(&gkb->lock);
-	gkb->stopped = true;
+	WRITE_ONCE(gkb->stopped, true);
+	disable_row_irqs_locked(gkb);
 	mutex_unlock(&gkb->lock);
 
-	flush_delayed_work(&gkb->work);
-	/*
-	 * gpio_keyboard_scan() will leave IRQs enabled;
-	 * we should disable them now.
-	 */
-	disable_row_irqs(gkb);
+	cancel_delayed_work_sync(&gkb->work);
+
+	mutex_lock(&gkb->lock);
+	gkb->scan_pending = false;
+	disable_row_irqs_locked(gkb);
+	mutex_unlock(&gkb->lock);
 }
 
 static void __maybe_unused gpio_keyboard_wakeup_en(struct gpio_keyboard *gkb)
@@ -471,7 +499,8 @@ static int gpio_keyboard_init_gpio(struct platform_device *pdev,
 	}
 
 	/* initialized as disabled - enabled by input->open */
-	disable_row_irqs(gkb);
+	gkb->irqs_enabled = true;
+	disable_row_irqs_locked(gkb);
 	return 0;
 }
 
@@ -544,7 +573,9 @@ static int gpio_keyboard_probe(struct platform_device *pdev)
 	irq = platform_get_irq_optional(pdev, 0);
 	gkb->clustered_irq = (irq > 0) ? irq : 0;
 	gkb->row_shift = get_count_order(gkb->col_gpios->ndescs);
+	gkb->scan_pending = false;
 	gkb->stopped = true;
+	gkb->irqs_enabled = false;
 	INIT_DELAYED_WORK(&gkb->work, gpio_keyboard_scan);
 	memset(gkb->last_key_state, 0, sizeof(gkb->last_key_state));
 	/* gkb comes from devm_kmalloc(): not zeroed */
